@@ -4,14 +4,14 @@ import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
 // --- Firebase Configuration ---
-// This uses the standard Vite method for accessing environment variables.
+// This uses the process.env method to ensure compatibility with Netlify's build environment.
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_API_KEY,
-  authDomain: import.meta.env.VITE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_APP_ID
+  apiKey: process.env.VITE_API_KEY,
+  authDomain: process.env.VITE_AUTH_DOMAIN,
+  projectId: process.env.VITE_PROJECT_ID,
+  storageBucket: process.env.VITE_STORAGE_BUCKET,
+  messagingSenderId: process.env.VITE_MESSAGING_SENDER_ID,
+  appId: process.env.VITE_APP_ID
 };
 
 // --- DEBUGGING STEP ---
@@ -21,8 +21,8 @@ if (!firebaseConfig.apiKey) {
     console.error("CRITICAL ERROR: Firebase API Key is missing or undefined. Check your VITE_API_KEY environment variable in Netlify.");
 }
 
+
 // --- Initialize Firebase ---
-// We wrap this in a try/catch block to provide better error messages.
 let app, db, auth;
 try {
     app = initializeApp(firebaseConfig);
