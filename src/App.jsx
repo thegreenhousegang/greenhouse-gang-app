@@ -16,7 +16,6 @@ const firebaseConfig = {
 // --- Safe Firebase Initialization ---
 let app, db, auth, firebaseInitializationError = null;
 
-// This function checks if all required keys are present.
 function areFirebaseKeysValid(config) {
     return Object.values(config).every(value => value && typeof value === 'string' && value.length > 0);
 }
@@ -34,7 +33,6 @@ try {
     firebaseInitializationError = error.message;
 }
 
-// This is the hardcoded ID for your app's database structure.
 const appId = "greenhouse-gang-nursery";
 
 // --- Cart Context ---
@@ -42,12 +40,35 @@ const CartContext = createContext();
 
 const CartProvider = ({ children }) => {
   const [cartItems, setCartItems] = useState([]);
-  const addToCart = (product) => setCartItems(prev => [...prev, { ...product, quantity: 1 }]);
-  const removeFromCart = (productId) => setCartItems(prev => prev.filter(item => item.id !== productId));
+
+  const addToCart = (product) => {
+    setCartItems(prevItems => {
+      const itemExists = prevItems.find(item => item.id === product.id);
+      if (itemExists) {
+        return prevItems.map(item =>
+          item.id === product.id ? { ...item, quantity: (item.quantity || 0) + 1 } : item
+        );
+      }
+      return [...prevItems, { ...product, quantity: 1 }];
+    });
+  };
+
+  const removeFromCart = (productId) => {
+    setCartItems(prevItems => prevItems.filter(item => item.id !== productId));
+  };
+  
+  const updateQuantity = (productId, newQuantity) => {
+    setCartItems(prevItems => prevItems.map(item => 
+        item.id === productId ? {...item, quantity: Math.max(1, newQuantity)} : item
+    ));
+  };
+
   const clearCart = () => setCartItems([]);
-  const cartTotal = cartItems.reduce((total, item) => total + item.price * (item.quantity || 1), 0);
+  
+  const cartTotal = cartItems.reduce((total, item) => total + (item.price || 0) * (item.quantity || 0), 0);
+
   return (
-    <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, clearCart, cartTotal }}>
+    <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, updateQuantity, clearCart, cartTotal }}>
       {children}
     </CartContext.Provider>
   );
@@ -72,10 +93,11 @@ function App() {
   const [plants, setPlants] = useState([]);
   const [faqs, setFaqs] = useState([]);
   const [isReady, setIsReady] = useState(false);
+  const [appError, setAppError] = useState(firebaseInitializationError);
 
   useEffect(() => {
     if (firebaseInitializationError) {
-      return; // Stop if Firebase failed to initialize
+      return; 
     }
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
@@ -83,7 +105,7 @@ function App() {
       } else {
         signInAnonymously(auth).catch(err => {
             console.error("Anonymous sign-in failed:", err);
-            firebaseInitializationError = "Could not sign in user anonymously.";
+            setAppError("Could not sign in user anonymously.");
         });
       }
     });
@@ -91,72 +113,87 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isReady) return;
+    if (!isReady || !db) return;
+    
     const plantsCol = collection(db, `artifacts/${appId}/public/data/plants`);
     const unsubscribePlants = onSnapshot(plantsCol, (snapshot) => {
       setPlants(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+    }, (err) => setAppError("Failed to fetch plant data."));
+    
     const faqsCol = collection(db, `artifacts/${appId}/public/data/faqs`);
     const unsubscribeFaqs = onSnapshot(faqsCol, (snapshot) => {
       setFaqs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+    }, (err) => console.error("Failed to fetch FAQs."));
+
     return () => {
       unsubscribePlants();
       unsubscribeFaqs();
     };
   }, [isReady]);
 
-  if (firebaseInitializationError) {
+  if (appError) {
     return (
       <div className="w-full h-screen flex items-center justify-center bg-red-50">
         <div className="p-8 bg-white shadow-lg rounded-lg text-center">
           <h1 className="text-2xl font-bold text-red-700 mb-4">Application Error</h1>
-          <p className="text-gray-700">Could not connect to the database. Please contact support.</p>
-          <p className="text-sm text-gray-500 mt-2">Error details: {firebaseInitializationError}</p>
+          <p className="text-gray-700">Could not connect to the database. Please check your Firebase settings and environment variables.</p>
+          <p className="text-sm text-gray-500 mt-2">Error details: {appError}</p>
         </div>
       </div>
     );
   }
 
   const renderPage = () => {
+    const isLoading = !isReady;
     switch (currentPage) {
         case 'home':
-            return <HomePage setCurrentPage={setCurrentPage} plants={plants.slice(0, 2)} isLoading={!isReady} />;
+            return <HomePage setCurrentPage={setCurrentPage} plants={plants.slice(0, 2)} isLoading={isLoading} />;
         case 'products':
-            return <ProductsPage plants={plants} isLoading={!isReady} />;
+            return <ProductsPage plants={plants} isLoading={isLoading} />;
         case 'cart':
             return <CartPage setCurrentPage={setCurrentPage} />;
         case 'help':
-            return <HelpPage faqs={faqs} />;
+            return <HelpPage faqs={faqs} isLoading={isLoading} />;
         default:
-            return <HomePage setCurrentPage={setCurrentPage} plants={plants.slice(0, 2)} isLoading={!isReady} />;
+            return <HomePage setCurrentPage={setCurrentPage} plants={plants.slice(0, 2)} isLoading={isLoading} />;
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-100 via-lime-50 to-yellow-50 font-sans text-gray-800 flex flex-col">
-        <header className="bg-green-700 text-white shadow-lg sticky top-0 z-50">
-          <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center">
-            <img src="https://i.imgur.com/YgA5z52.png" alt="The Greenhouse Gang Logo" className="h-14 sm:h-16 cursor-pointer" onClick={() => setCurrentPage('home')} />
-            <nav className="flex space-x-2 sm:space-x-4 text-sm sm:text-base">
-              <button onClick={() => setCurrentPage('home')} className="hover:bg-green-600 p-2 rounded-md transition-colors duration-200 flex items-center space-x-1"><HomeIcon /><span>Home</span></button>
-              <button onClick={() => setCurrentPage('products')} className="hover:bg-green-600 p-2 rounded-md transition-colors duration-200 flex items-center space-x-1"><CollectionIcon /><span>Our Plants</span></button>
-              <button onClick={() => setCurrentPage('help')} className="hover:bg-green-600 p-2 rounded-md transition-colors duration-200 flex items-center space-x-1"><HelpIcon /><span>Help & FAQ</span></button>
-              <CartButton setCurrentPage={setCurrentPage} />
-            </nav>
-          </div>
-        </header>
+        <Header setCurrentPage={setCurrentPage} />
         <main className="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            {isReady ? renderPage() : <p className="text-center">Loading Shop...</p>}
+            {isReady ? renderPage() : <p className="text-center text-xl font-semibold">Loading Your Beautiful Shop...</p>}
         </main>
         <Footer />
     </div>
   );
 }
 
-// --- Specific Page Components ---
+const Header = ({ setCurrentPage }) => (
+    <header className="bg-green-700 text-white shadow-lg sticky top-0 z-50">
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center">
+        <img src="https://i.imgur.com/YgA5z52.png" alt="The Greenhouse Gang Logo" className="h-14 sm:h-16 cursor-pointer" onClick={() => setCurrentPage('home')} />
+        <nav className="flex space-x-2 sm:space-x-4 text-sm sm:text-base">
+          <button onClick={() => setCurrentPage('home')} className="hover:bg-green-600 p-2 rounded-md transition-colors duration-200 flex items-center space-x-1"><HomeIcon /><span>Home</span></button>
+          <button onClick={() => setCurrentPage('products')} className="hover:bg-green-600 p-2 rounded-md transition-colors duration-200 flex items-center space-x-1"><CollectionIcon /><span>Our Plants</span></button>
+          <button onClick={() => setCurrentPage('help')} className="hover:bg-green-600 p-2 rounded-md transition-colors duration-200 flex items-center space-x-1"><HelpIcon /><span>Help & FAQ</span></button>
+          <CartButton setCurrentPage={setCurrentPage} />
+        </nav>
+      </div>
+    </header>
+);
+
+const Footer = () => (
+    <footer className="bg-green-800 text-green-100 py-8 text-center mt-8">
+        <p className="text-lg font-semibold">The Greenhouse Gang Plant Nursery</p>
+        <p className="text-sm">&copy; {new Date().getFullYear()} - Registered Plant Nursery in Florida.</p>
+    </footer>
+);
+
+
 const HomePage = ({ setCurrentPage, plants, isLoading }) => (
-    <div className="text-center">
+    <div className="text-center animate-fade-in">
         <h2 className="text-4xl sm:text-5xl font-bold text-green-700 mb-4">Welcome to The Greenhouse Gang!</h2>
         <p className="text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto">Your friendly, family-run nursery bringing a touch of Florida's sunshine to your home with our happy, healthy plants.</p>
         <div className="my-8 bg-white p-8 rounded-xl shadow-lg">
@@ -175,9 +212,10 @@ const HomePage = ({ setCurrentPage, plants, isLoading }) => (
 
 const ProductsPage = ({ plants, isLoading }) => {
     const { addToCart } = useCart();
-    if (isLoading) return <p className="text-center">Loading Plants...</p>;
+    if (isLoading) return <p className="text-center text-xl font-semibold">Loading Plants...</p>;
+    if (!plants || plants.length === 0) return <p className="text-center text-xl font-semibold">Our plants are currently tucked away. Please check back soon!</p>;
     return (
-        <div>
+        <div className="animate-fade-in">
             <h2 className="text-3xl sm:text-4xl font-bold text-green-700 mb-8 text-center">Our Plant Collection</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 lg:gap-8">
                 {plants.map(plant => <ProductCard key={plant.id} plant={plant} onAddToCart={() => addToCart(plant)} />)}
@@ -186,23 +224,26 @@ const ProductsPage = ({ plants, isLoading }) => {
     );
 };
 
-const ProductCard = ({ plant, onAddToCart, showLimitedInfo = false }) => (
-    <div className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col transition-all duration-300 hover:shadow-2xl group">
-        <img src={plant.imageUrl} alt={plant.name} className="w-full h-56 object-cover group-hover:scale-105 transition-transform duration-300" />
-        <div className="p-5 flex flex-col flex-grow">
-            <h3 className="text-xl font-semibold text-green-700">{plant.name}</h3>
-            {!showLimitedInfo && <p className="text-gray-600 text-sm mt-2 flex-grow">{plant.description}</p>}
-            <div className="mt-4">
-                <p className="text-2xl font-bold text-yellow-500">${plant.price.toFixed(2)}</p>
-                {onAddToCart && <button onClick={onAddToCart} className="mt-2 w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">Add to Cart</button>}
+const ProductCard = ({ plant, onAddToCart, showLimitedInfo = false }) => {
+    const price = typeof plant.price === 'number' ? plant.price : 0;
+    return (
+        <div className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col transition-all duration-300 hover:shadow-2xl group">
+            <img src={plant.imageUrl || 'https://placehold.co/400x400/A2D9A1/4F7942?text=Plant+Image'} alt={plant.name} className="w-full h-56 object-cover group-hover:scale-105 transition-transform duration-300" />
+            <div className="p-5 flex flex-col flex-grow">
+                <h3 className="text-xl font-semibold text-green-700">{plant.name || "Unnamed Plant"}</h3>
+                {!showLimitedInfo && <p className="text-gray-600 text-sm mt-2 flex-grow">{plant.description || "No description available."}</p>}
+                <div className="mt-4">
+                    <p className="text-2xl font-bold text-yellow-500">${price.toFixed(2)}</p>
+                    {onAddToCart && <button onClick={onAddToCart} className="mt-2 w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">Add to Cart</button>}
+                </div>
             </div>
         </div>
-    </div>
-);
+    );
+};
 
 const CartButton = ({ setCurrentPage }) => {
     const { cartItems } = useCart();
-    const totalItems = cartItems.reduce((acc, item) => acc + item.quantity, 0);
+    const totalItems = cartItems.reduce((acc, item) => acc + (item.quantity || 0), 0);
     return (
         <button onClick={() => setCurrentPage('cart')} className="hover:bg-green-600 p-2 rounded-md transition-colors duration-200 relative flex items-center space-x-1">
             <ShoppingCartIcon />
@@ -213,16 +254,21 @@ const CartButton = ({ setCurrentPage }) => {
 }
 
 const CartPage = ({ setCurrentPage }) => {
-    const { cartItems, removeFromCart, clearCart, cartTotal } = useCart();
+    const { cartItems, removeFromCart, updateQuantity, clearCart, cartTotal } = useCart();
     if (cartItems.length === 0) return <div className="text-center"><h2 className="text-2xl mb-4">Your Cart is Empty</h2><button onClick={() => setCurrentPage('products')} className="bg-green-600 text-white font-semibold py-2 px-6 rounded-lg">Browse Plants</button></div>
     return (
-        <div className="bg-white p-8 rounded-xl shadow-xl">
+        <div className="bg-white p-8 rounded-xl shadow-xl animate-fade-in">
             <h2 className="text-3xl font-bold text-green-700 mb-6">Your Cart</h2>
             {cartItems.map(item => (
                 <div key={item.id} className="flex items-center justify-between border-b py-2">
-                    <span>{item.name} (x{item.quantity})</span>
-                    <span>${(item.price * item.quantity).toFixed(2)}</span>
-                    <button onClick={() => removeFromCart(item.id)} className="text-red-500 hover:text-red-700">Remove</button>
+                    <span className="font-semibold">{item.name || "Unknown Item"}</span>
+                    <div className="flex items-center space-x-2">
+                        <button onClick={() => updateQuantity(item.id, (item.quantity || 1) - 1)} className="px-2 border rounded">-</button>
+                        <span>{item.quantity || 1}</span>
+                        <button onClick={() => updateQuantity(item.id, (item.quantity || 1) + 1)} className="px-2 border rounded">+</button>
+                    </div>
+                    <span>${((item.price || 0) * (item.quantity || 1)).toFixed(2)}</span>
+                    <button onClick={() => removeFromCart(item.id)} className="text-red-500 hover:text-red-700 text-sm">Remove</button>
                 </div>
             ))}
             <div className="mt-6 text-right">
@@ -233,15 +279,15 @@ const CartPage = ({ setCurrentPage }) => {
     );
 };
 
-const HelpPage = ({ faqs }) => (
-    <div className="max-w-3xl mx-auto">
+const HelpPage = ({ faqs, isLoading }) => (
+    <div className="max-w-3xl mx-auto animate-fade-in">
         <h2 className="text-3xl font-bold text-green-700 mb-8 text-center">Help & FAQ</h2>
         <a href="https://your-blog-website.com" target="_blank" rel="noopener noreferrer" className="block text-center bg-green-50 p-6 rounded-xl shadow-lg mb-8 hover:bg-green-100">
             <h3 className="text-2xl font-semibold text-green-600">Visit our Plant Care Blog!</h3>
             <p className="text-gray-700 mt-2">For in-depth guides, tips, and tricks to help your plants thrive.</p>
         </a>
         <div className="space-y-4">
-            {faqs.map(faq => (
+            {isLoading ? <p>Loading FAQs...</p> : faqs.map(faq => (
                 <details key={faq.id} className="p-4 bg-white rounded-lg shadow cursor-pointer">
                     <summary className="font-semibold text-lg">{faq.question}</summary>
                     <p className="mt-2 text-gray-700">{faq.answer}</p>
@@ -251,14 +297,6 @@ const HelpPage = ({ faqs }) => (
     </div>
 );
 
-const Footer = () => (
-    <footer className="bg-green-800 text-green-100 py-8 text-center mt-8">
-        <p className="text-lg font-semibold">The Greenhouse Gang Plant Nursery</p>
-        <p className="text-sm">&copy; {new Date().getFullYear()} - Registered Plant Nursery in Florida.</p>
-    </footer>
-);
-
-// Default export: The main App component wrapped with CartProvider
 export default function ProvidedApp() {
   return (
     <CartProvider>
