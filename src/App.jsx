@@ -1,26 +1,43 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, getDocs, doc, setDoc, addDoc, onSnapshot } from 'firebase/firestore';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
 // --- Firebase Configuration ---
-// This now securely uses environment variables that we will set up in Netlify
+// This now securely uses environment variables that we will set up in Netlify.
+// We are adding console.log to debug the values being received from Netlify.
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_API_KEY,
-  authDomain: import.meta.env.VITE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_APP_ID
+  apiKey: process.env.VITE_API_KEY,
+  authDomain: process.env.VITE_AUTH_DOMAIN,
+  projectId: process.env.VITE_PROJECT_ID,
+  storageBucket: process.env.VITE_STORAGE_BUCKET,
+  messagingSenderId: process.env.VITE_MESSAGING_SENDER_ID,
+  appId: process.env.VITE_APP_ID
 };
 
-// --- Initialize Firebase ---
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const auth = getAuth(app);
+// --- DEBUGGING STEP ---
+// This will print the configuration to your browser's developer console.
+console.log("Firebase Config Loaded by App:", firebaseConfig);
+if (!firebaseConfig.apiKey) {
+    console.error("CRITICAL ERROR: Firebase API Key is missing. Check your VITE_API_KEY environment variable in Netlify.");
+}
 
-// --- App ID (from Canvas environment or default) ---
-const appId = import.meta.env.VITE_APP_ID || 'greenhouse-gang-nursery';
+
+// --- Initialize Firebase ---
+// We wrap this in a try/catch block to provide better error messages.
+let app, db, auth;
+try {
+    app = initializeApp(firebaseConfig);
+    db = getFirestore(app);
+    auth = getAuth(app);
+} catch (error) {
+    console.error("Firebase initialization failed:", error);
+    // This will help us see if the config values themselves are malformed.
+}
+
+
+// This is the hardcoded ID for your app's database structure.
+const appId = "greenhouse-gang-nursery";
 
 // --- Cart Context ---
 const CartContext = createContext();
@@ -86,18 +103,20 @@ function App() {
   const [faqs, setFaqs] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [userId, setUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [showAddedToCartMessage, setShowAddedToCartMessage] = useState(false);
   const [messageProduct, setMessageProduct] = useState('');
-  
-  // This replaces the old default export
-  const RealApp = () => {
-      // Firebase Auth Listener
-    useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+
+  // Firebase Auth Listener
+  useEffect(() => {
+    if (!auth) {
+        setError("Firebase connection failed. Check console for details.");
+        setIsLoading(false);
+        return;
+    }
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
         if (user) {
-            setUserId(user.uid);
+            setIsAuthReady(true);
         } else {
             try {
                 await signInAnonymously(auth);
@@ -106,111 +125,63 @@ function App() {
                 setError("Failed to initialize user session.");
             }
         }
-        setIsAuthReady(true);
-        });
-        return () => unsubscribe();
-    }, []);
+    });
+    return () => unsubscribe();
+  }, []);
 
+  // Fetch Data (Plants & FAQs)
+  useEffect(() => {
+    if (!isAuthReady) return;
 
-    // Fetch Plants Data
-    useEffect(() => {
-        if (!isAuthReady) return;
+    setIsLoading(true);
+    const plantsCollectionPath = `artifacts/${appId}/public/data/plants`;
+    const faqsCollectionPath = `artifacts/${appId}/public/data/faqs`;
+    
+    const plantsCol = collection(db, plantsCollectionPath);
+    const faqsCol = collection(db, faqsCollectionPath);
 
-        setIsLoading(true);
-        const plantsCollectionPath = `artifacts/${appId}/public/data/plants`;
-        const plantsCol = collection(db, plantsCollectionPath);
+    const unsubscribePlants = onSnapshot(plantsCol, (snapshot) => {
+      const plantsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setPlants(plantsList);
+      setIsLoading(false);
+    }, (err) => {
+      console.error("Error fetching plants: ", err);
+      setError("Could not load plant data. Please check back soon.");
+      setIsLoading(false);
+    });
+    
+    const unsubscribeFaqs = onSnapshot(faqsCol, (snapshot) => {
+      const faqsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setFaqs(faqsList);
+    }, (err) => {
+      console.error("Error fetching FAQs: ", err);
+    });
 
-        const unsubscribePlants = onSnapshot(plantsCol, (snapshot) => {
-        const plantsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setPlants(plantsList);
-        if (plantsList.length === 0) {
-            addSampleData('plants');
-        }
-        setIsLoading(false);
-        }, (err) => {
-        console.error("Error fetching plants: ", err);
-        setError("Could not load our precious plants. Please try refreshing!");
-        setIsLoading(false);
-        });
-
-        return () => unsubscribePlants();
-    }, [isAuthReady]);
-
-    // Fetch FAQs Data
-    useEffect(() => {
-        if (!isAuthReady) return;
-
-        const faqsCollectionPath = `artifacts/${appId}/public/data/faqs`;
-        const faqsCol = collection(db, faqsCollectionPath);
-        
-        const unsubscribeFaqs = onSnapshot(faqsCol, (snapshot) => {
-        const faqsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setFaqs(faqsList);
-        if (faqsList.length === 0) {
-            addSampleData('faqs');
-        }
-        }, (err) => {
-        console.error("Error fetching FAQs: ", err);
-        });
-        return () => unsubscribeFaqs();
-    }, [isAuthReady]);
-
-    // Function to add sample data
-    const addSampleData = async (type) => {
-        const plantsCollectionPath = `artifacts/${appId}/public/data/plants`;
-        const faqsCollectionPath = `artifacts/${appId}/public/data/faqs`;
-        if (type === 'plants') {
-        const samplePlants = [
-            { name: "Monstera Deliciosa", price: 25.99, description: "Iconic split leaves, a true statement piece.", careLevel: "Easy", lightNeeds: "Bright, indirect light", waterNeeds: "Water when top 2 inches of soil are dry.", imageUrl: "https://placehold.co/400x400/A2D9A1/4F7942?text=Monstera", stock: 10 },
-            { name: "Snake Plant (Sansevieria)", price: 18.50, description: "Hardy and air-purifying, great for beginners.", careLevel: "Very Easy", lightNeeds: "Low to bright, indirect light", waterNeeds: "Allow soil to dry out completely.", imageUrl: "https://placehold.co/400x400/F5F5DC/8FBC8F?text=Snake+Plant", stock: 15 },
-            { name: "Fiddle Leaf Fig", price: 45.00, description: "Trendy and tall, with large, violin-shaped leaves.", careLevel: "Intermediate", lightNeeds: "Bright, consistent light", waterNeeds: "Water thoroughly when top inch is dry.", imageUrl: "https://placehold.co/400x400/90EE90/3B5323?text=Fiddle+Leaf", stock: 5 },
-            { name: "Pothos (Devil's Ivy)", price: 12.99, description: "Trailing vine, adaptable and easy to propagate.", careLevel: "Easy", lightNeeds: "Low to bright, indirect light", waterNeeds: "Water when top inch of soil is dry.", imageUrl: "https://placehold.co/400x400/98FB98/2E8B57?text=Pothos", stock: 20 },
-        ];
-        for (const plant of samplePlants) {
-            try {
-            await addDoc(collection(db, plantsCollectionPath), plant);
-            } catch (e) {
-            console.error("Error adding sample plant: ", e);
-            }
-        }
-        } else if (type === 'faqs') {
-        const sampleFaqs = [
-            { question: "What are your shipping options?", answer: "We offer standard and expedited shipping within Florida. Standard shipping usually takes 3-5 business days. You can see specific rates at checkout." },
-            { question: "My plant arrived damaged, what do I do?", answer: "Oh no! We're so sorry to hear that. Please take a photo of the damage and contact us within 48 hours of delivery at help@greenhousegang.com, and we'll make it right!" },
-            { question: "How do I know if a plant is right for my home?", answer: "Each plant listing includes care information like light and water needs. Our Plant Care blog also has tons of tips! If you're unsure, feel free to ask us!" },
-            { question: "Are you open for in-person visits?", answer: "Currently, we are an online-only nursery. This helps us keep our plants happy and our prices friendly! We are a registered plant nursery in Florida." },
-        ];
-        for (const faq of sampleFaqs) {
-            try {
-            await addDoc(collection(db, faqsCollectionPath), faq);
-            } catch (e) {
-            console.error("Error adding sample FAQ: ", e);
-            }
-        }
-        }
+    return () => {
+        unsubscribePlants();
+        unsubscribeFaqs();
     };
+  }, [isAuthReady]);
 
-
-    const renderPage = () => {
-        switch (currentPage) {
+  const renderPage = () => {
+    switch (currentPage) {
         case 'home':
-            return <HomePage setCurrentPage={setCurrentPage} plants={plants.slice(0,2)} isLoading={isLoading} error={error} />;
+            return <HomePage setCurrentPage={setCurrentPage} plants={plants.slice(0, 2)} isLoading={isLoading} error={error} />;
         case 'products':
-            return <ProductsPage plants={plants} isLoading={isLoading} error={error} setShowAddedToCartMessage={setShowAddedToCartMessage} setMessageProduct={setMessageProduct}/>;
+            return <ProductsPage plants={plants} isLoading={isLoading} error={error} setShowAddedToCartMessage={setShowAddedToCartMessage} setMessageProduct={setMessageProduct} />;
         case 'cart':
             return <CartPage setCurrentPage={setCurrentPage} />;
         case 'help':
             return <HelpPage faqs={faqs} />;
         default:
-            return <HomePage setCurrentPage={setCurrentPage} plants={plants.slice(0,2)} isLoading={isLoading} error={error} />;
-        }
-    };
-    
-    const { cartItems } = useCart();
+            return <HomePage setCurrentPage={setCurrentPage} plants={plants.slice(0, 2)} isLoading={isLoading} error={error} />;
+    }
+  };
 
-    return (
-        <div className="min-h-screen bg-gradient-to-br from-green-100 via-lime-50 to-yellow-50 font-sans text-gray-800 flex flex-col">
-        {/* Header */}
+  const { cartItems } = useCart();
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-green-100 via-lime-50 to-yellow-50 font-sans text-gray-800 flex flex-col">
         <header className="bg-green-700 text-white shadow-lg sticky top-0 z-50">
             <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-col sm:flex-row justify-between items-center">
             <div 
@@ -244,19 +215,16 @@ function App() {
             </div>
         </header>
 
-        {/* Added to Cart Message */}
         {showAddedToCartMessage && (
             <div className="fixed top-20 right-5 bg-green-500 text-white p-3 rounded-lg shadow-md z-50 animate-pulse-once">
             {messageProduct} added to cart!
             </div>
         )}
 
-        {/* Main Content */}
         <main className="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-8">
             {renderPage()}
         </main>
 
-        {/* Footer */}
         <footer className="bg-green-800 text-green-100 py-8 text-center">
             <div className="container mx-auto px-4">
             <p className="text-lg font-semibold mb-2">The Greenhouse Gang Plant Nursery</p>
@@ -267,15 +235,8 @@ function App() {
             </p>
             </div>
         </footer>
-        </div>
-    );
-  }
-  
-  return (
-      <CartProvider>
-          <RealApp/>
-      </CartProvider>
-  )
+    </div>
+  );
 }
 
 // --- Page Components ---
@@ -288,8 +249,6 @@ const HomePage = ({ setCurrentPage, plants, isLoading, error }) => {
           Your friendly, family-run nursery bringing a touch of Florida's sunshine to your home with our happy, healthy plants.
         </p>
       </header>
-
-      {/* Marketing Section: About Us / Why Choose Us */}
       <section className="mb-12 bg-white p-6 sm:p-8 rounded-xl shadow-lg">
         <h3 className="text-2xl font-semibold text-green-600 mb-4">More Than Just Plants, We're Family</h3>
         <p className="text-gray-700 mb-3">
@@ -302,12 +261,10 @@ const HomePage = ({ setCurrentPage, plants, isLoading, error }) => {
           Explore Our Green Gang
         </button>
       </section>
-      
-      {/* Featured Plants Section */}
       <section className="mb-12">
         <h3 className="text-3xl font-semibold text-green-700 mb-6">Featured Friends</h3>
         {isLoading && <p className="text-gray-600">Loading our favorite plants...</p>}
-        {error && <p className="text-red-500">{error}</p>}
+        {error && <p className="text-red-500 p-4 bg-red-100 rounded-lg">{error}</p>}
         {!isLoading && !error && plants && plants.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 lg:gap-8">
             {plants.map(plant => (
@@ -319,8 +276,6 @@ const HomePage = ({ setCurrentPage, plants, isLoading, error }) => {
           <p className="text-gray-600">Our featured plants are shy today! Check back soon or browse all plants.</p>
         )}
       </section>
-
-      {/* Call to Action for Help/Blog */}
       <section className="bg-green-50 p-6 sm:p-8 rounded-xl shadow">
         <h3 className="text-2xl font-semibold text-green-600 mb-3">Need Plant Care Tips?</h3>
         <p className="text-gray-700 mb-4">
@@ -339,18 +294,15 @@ const HomePage = ({ setCurrentPage, plants, isLoading, error }) => {
 
 const ProductsPage = ({ plants, isLoading, error, setShowAddedToCartMessage, setMessageProduct }) => {
   const { addToCart } = useCart();
-
   const handleAddToCart = (plant) => {
     addToCart(plant);
     setMessageProduct(plant.name);
     setShowAddedToCartMessage(true);
-    setTimeout(() => setShowAddedToCartMessage(false), 3000); // Hide message after 3 seconds
+    setTimeout(() => setShowAddedToCartMessage(false), 3000);
   };
-
   if (isLoading) return <p className="text-center text-gray-600 text-xl">Loading our beautiful plants...</p>;
   if (error) return <p className="text-center text-red-500 text-xl p-4 bg-red-100 rounded-lg">{error}</p>;
   if (!plants || plants.length === 0) return <p className="text-center text-gray-600 text-xl">No plants available at the moment. Please check back soon!</p>;
-
   return (
     <div>
       <h2 className="text-3xl sm:text-4xl font-bold text-green-700 mb-8 text-center">Our Plant Collection</h2>
@@ -375,7 +327,6 @@ const ProductCard = ({ plant, onAddToCart, showLimitedInfo = false }) => {
       <div className="p-4 sm:p-5 flex flex-col flex-grow">
         <h3 className="text-xl sm:text-2xl font-semibold text-green-700 mb-2">{plant.name}</h3>
         {!showLimitedInfo && <p className="text-gray-600 text-sm mb-3 flex-grow">{plant.description}</p>}
-        
         {!showLimitedInfo && (
           <div className="mb-4 text-xs text-gray-500 space-y-1">
             <p><strong className="text-green-600">Care:</strong> {plant.careLevel}</p>
@@ -400,10 +351,8 @@ const ProductCard = ({ plant, onAddToCart, showLimitedInfo = false }) => {
   );
 };
 
-
 const CartPage = ({ setCurrentPage }) => {
   const { cartItems, removeFromCart, updateQuantity, clearCart, cartTotal } = useCart();
-
   if (cartItems.length === 0) {
     return (
       <div className="text-center">
@@ -418,14 +367,11 @@ const CartPage = ({ setCurrentPage }) => {
       </div>
     );
   }
-
   const handleCheckout = () => {
-    // In a real app, this would redirect to a payment gateway or a more complex checkout flow.
     alert(`Thank you for your order of $${cartTotal.toFixed(2)}! (This is a demo checkout)`);
     clearCart();
     setCurrentPage('home');
   };
-
   return (
     <div className="bg-white p-6 sm:p-8 rounded-xl shadow-xl">
       <h2 className="text-3xl sm:text-4xl font-bold text-green-700 mb-8">Your Shopping Cart</h2>
@@ -481,15 +427,13 @@ const HelpPage = ({ faqs }) => {
   return (
     <div className="max-w-3xl mx-auto">
       <h2 className="text-3xl sm:text-4xl font-bold text-green-700 mb-8 text-center">Help & Frequently Asked Questions</h2>
-      
-      {/* Plant Care Blog Link */}
       <section className="mb-10 p-6 bg-green-50 rounded-xl shadow-lg text-center">
         <h3 className="text-2xl font-semibold text-green-600 mb-3">Plant Care Guidance</h3>
         <p className="text-gray-700 mb-4">
           Looking for tips on how to keep your new green friends thriving? Our Plant Care Corner blog is packed with helpful articles and guides!
         </p>
         <a 
-          href="https://your-blog-website.com/plant-care" // Replace with your actual blog URL
+          href="https://your-blog-website.com/plant-care"
           target="_blank" 
           rel="noopener noreferrer"
           className="inline-block bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-transform duration-150 hover:scale-105"
@@ -498,8 +442,6 @@ const HelpPage = ({ faqs }) => {
         </a>
         <p className="text-xs text-gray-500 mt-2">(This will open in a new tab)</p>
       </section>
-
-      {/* FAQ Section */}
       <section>
         <h3 className="text-2xl font-semibold text-green-600 mb-6 text-center">Common Questions</h3>
         {(!faqs || faqs.length === 0) && (
@@ -517,7 +459,6 @@ const HelpPage = ({ faqs }) => {
 
 const FAQItem = ({ question, answer }) => {
   const [isOpen, setIsOpen] = useState(false);
-
   return (
     <div className="bg-white rounded-lg shadow-md overflow-hidden">
       <button 
@@ -536,6 +477,11 @@ const FAQItem = ({ question, answer }) => {
   );
 };
 
-
 // Default export: The main App component wrapped with CartProvider
-export default App;
+export default function ProvidedApp() {
+  return (
+    <CartProvider>
+      <App />
+    </CartProvider>
+  );
+}
