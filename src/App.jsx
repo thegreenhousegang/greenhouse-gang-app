@@ -14,16 +14,9 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_APP_ID
 };
 
-// --- Initialize Firebase ---
+// --- Firebase Services ---
+// We will initialize these inside the component to make it more robust.
 let app, db, auth;
-try {
-    app = initializeApp(firebaseConfig);
-    db = getFirestore(app);
-    auth = getAuth(app);
-} catch (error) {
-    console.error("Firebase initialization failed. Check your environment variables.", error);
-}
-
 
 // This is the hardcoded ID for your app's database structure.
 const appId = "greenhouse-gang-nursery";
@@ -96,26 +89,35 @@ function App() {
   const [showAddedToCartMessage, setShowAddedToCartMessage] = useState(false);
   const [messageProduct, setMessageProduct] = useState('');
 
-  // Firebase Auth Listener
+  // Firebase Initialization and Auth Listener
   useEffect(() => {
-    if (!auth) {
-        setError("Firebase connection failed. Check console for details.");
-        setIsLoading(false);
-        return;
+    try {
+      // Check if Firebase has already been initialized
+      if (!app) {
+        // Initialize Firebase services only once.
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+      }
+
+      const unsubscribe = onAuthStateChanged(auth, async (user) => {
+          if (user) {
+              setIsAuthReady(true);
+          } else {
+              try {
+                  await signInAnonymously(auth);
+              } catch (e) {
+                  console.error("Anonymous sign-in error:", e);
+                  setError("Failed to initialize user session.");
+              }
+          }
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      console.error("Firebase initialization failed:", e);
+      setError("Critical error connecting to the database. Please check environment variables.");
+      setIsLoading(false);
     }
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-        if (user) {
-            setIsAuthReady(true);
-        } else {
-            try {
-                await signInAnonymously(auth);
-            } catch (e) {
-                console.error("Anonymous sign-in error:", e);
-                setError("Failed to initialize user session.");
-            }
-        }
-    });
-    return () => unsubscribe();
   }, []);
 
   // Fetch Data (Plants & FAQs)
