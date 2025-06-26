@@ -16,12 +16,18 @@ const firebaseConfig = {
 // --- Safe Firebase Initialization ---
 let app, db, auth, firebaseInitializationError = null;
 try {
-    app = initializeApp(firebaseConfig);
-    db = getFirestore(app);
-    auth = getAuth(app);
+    // Check if all keys are valid before initializing
+    const areKeysValid = Object.values(firebaseConfig).every(key => key && typeof key === 'string' && key.length > 0);
+    if (areKeysValid) {
+      app = initializeApp(firebaseConfig);
+      db = getFirestore(app);
+      auth = getAuth(app);
+    } else {
+      throw new Error("One or more Firebase environment variables are missing or invalid.");
+    }
 } catch (error) {
     console.error("Firebase initialization failed:", error);
-    firebaseInitializationError = "Could not initialize Firebase. Please check your environment variables.";
+    firebaseInitializationError = error.message;
 }
 
 const appId = "greenhouse-gang-nursery";
@@ -50,7 +56,7 @@ const CartProvider = ({ children }) => {
         setCartItems(prev => prev.map(item => item.id === productId ? { ...item, quantity: newQuantity } : item));
     };
     const clearCart = () => setCartItems([]);
-    const cartTotal = cartItems.reduce((total, item) => total + (item.price || 0) * item.quantity, 0);
+    const cartTotal = cartItems.reduce((total, item) => total + (item.price || 0) * (item.quantity || 1), 0);
     return <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, updateQuantity, clearCart, cartTotal }}>{children}</CartContext.Provider>;
 };
 
@@ -59,48 +65,64 @@ function App() {
     const [currentPage, setCurrentPage] = useState('home');
     const [plants, setPlants] = useState([]);
     const [faqs, setFaqs] = useState([]);
-    const [isReady, setIsReady] = useState(false);
+    const [appStatus, setAppStatus] = useState('loading'); // 'loading', 'ready', 'error'
     const [appError, setAppError] = useState(firebaseInitializationError);
 
     useEffect(() => {
-        if (appError) return;
-        return onAuthStateChanged(auth, user => {
+        if (appError) {
+          setAppStatus('error');
+          return;
+        }
+        const unsubscribe = onAuthStateChanged(auth, user => {
             if (user) {
-                setIsReady(true);
+                setAppStatus('ready');
             } else {
-                signInAnonymously(auth).catch(err => setAppError("Anonymous sign-in failed."));
+                signInAnonymously(auth).catch(err => {
+                  console.error("Anonymous sign-in failed:", err);
+                  setAppError("Anonymous sign-in failed. Please check Firebase Authentication settings.");
+                  setAppStatus('error');
+                });
             }
         });
+        return () => unsubscribe();
     }, [appError]);
 
     useEffect(() => {
-        if (!isReady) return;
+        if (appStatus !== 'ready' || !db) return;
+
         const plantsUnsub = onSnapshot(collection(db, `artifacts/${appId}/public/data/plants`), 
             snapshot => setPlants(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
-            err => setAppError("Failed to fetch plant data.")
+            err => {
+              console.error("Failed to fetch plants:", err);
+              setAppError("Failed to fetch plant data.");
+              setAppStatus('error');
+            }
         );
+
         const faqsUnsub = onSnapshot(collection(db, `artifacts/${appId}/public/data/faqs`),
             snapshot => setFaqs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
-            err => console.error("Failed to fetch FAQs.")
+            err => console.error("Failed to fetch FAQs:", err)
         );
+
         return () => {
             plantsUnsub();
             faqsUnsub();
         };
-    }, [isReady]);
+    }, [appStatus]);
 
-    if (appError) {
+    if (appStatus === 'error') {
         return (
             <div className="w-full h-screen flex items-center justify-center bg-red-50 text-center">
                 <div className="p-8 bg-white shadow-lg rounded-lg">
                     <h1 className="text-2xl font-bold text-red-700 mb-4">Application Error</h1>
-                    <p className="text-gray-700">{appError}</p>
+                    <p className="text-gray-700">{appError || "An unknown error occurred."}</p>
+                    <p className="text-sm text-gray-500 mt-4">Please check the developer console (F12) for more details and contact support if the issue persists.</p>
                 </div>
             </div>
         );
     }
 
-    if (!isReady) {
+    if (appStatus === 'loading') {
         return <div className="w-full h-screen flex items-center justify-center"><p className="text-xl font-semibold">Loading Your Beautiful Shop...</p></div>
     }
 
@@ -148,10 +170,12 @@ const Footer = () => (
     </footer>
 );
 
+const ShoppingCartIcon = () => <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 00-3 3h15.75m-12.75-3h11.218c1.121-2.3 2.1-4.684 2.924-7.138a60.114 60.114 0 00-16.536-1.84M7.5 14.25L5.106 5.272M6 20.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm12.75 0a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" /></svg>;
+
 const CartButton = () => {
     const { cartItems } = useContext(CartContext);
     const { setCurrentPage } = useContext(PageContext);
-    const totalItems = cartItems.reduce((acc, item) => acc + item.quantity, 0);
+    const totalItems = cartItems.reduce((acc, item) => acc + (item.quantity || 0), 0);
     return (
         <button onClick={() => setCurrentPage('cart')} className="hover:bg-green-600 p-2 rounded-md transition-colors relative flex items-center">
             <ShoppingCartIcon />
@@ -217,13 +241,13 @@ const CartPage = () => {
             <h2 className="text-3xl font-bold text-green-700 mb-6">Your Cart</h2>
             {cartItems.map(item => (
                 <div key={item.id} className="flex items-center justify-between border-b py-2">
-                    <span className="font-semibold">{item.name}</span>
+                    <span className="font-semibold">{item.name || "Unknown Item"}</span>
                     <div className="flex items-center space-x-2">
-                        <button onClick={() => updateQuantity(item.id, item.quantity - 1)} className="px-2 border rounded">-</button>
-                        <span>{item.quantity}</span>
-                        <button onClick={() => updateQuantity(item.id, item.quantity + 1)} className="px-2 border rounded">+</button>
+                        <button onClick={() => updateQuantity(item.id, (item.quantity || 1) - 1)} className="px-2 border rounded">-</button>
+                        <span>{item.quantity || 1}</span>
+                        <button onClick={() => updateQuantity(item.id, (item.quantity || 1) + 1)} className="px-2 border rounded">+</button>
                     </div>
-                    <span>${((item.price || 0) * item.quantity).toFixed(2)}</span>
+                    <span>${((item.price || 0) * (item.quantity || 1)).toFixed(2)}</span>
                     <button onClick={() => removeFromCart(item.id)} className="text-red-500 hover:text-red-700 text-sm">Remove</button>
                 </div>
             ))}
