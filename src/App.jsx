@@ -16,14 +16,13 @@ const firebaseConfig = {
 // --- Safe Firebase Initialization ---
 let app, db, auth, firebaseInitializationError = null;
 try {
-    // Check if all keys are valid before initializing
     const areKeysValid = Object.values(firebaseConfig).every(key => key && typeof key === 'string' && key.length > 0);
     if (areKeysValid) {
-      app = initializeApp(firebaseConfig);
-      db = getFirestore(app);
-      auth = getAuth(app);
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
     } else {
-      throw new Error("One or more Firebase environment variables are missing or invalid.");
+        throw new Error("One or more Firebase environment variables are missing or invalid.");
     }
 } catch (error) {
     console.error("Firebase initialization failed:", error);
@@ -65,22 +64,18 @@ function App() {
     const [currentPage, setCurrentPage] = useState('home');
     const [plants, setPlants] = useState([]);
     const [faqs, setFaqs] = useState([]);
-    const [appStatus, setAppStatus] = useState('loading'); // 'loading', 'ready', 'error'
+    const [appStatus, setAppStatus] = useState('loading');
     const [appError, setAppError] = useState(firebaseInitializationError);
 
     useEffect(() => {
-        if (appError) {
-          setAppStatus('error');
-          return;
-        }
+        if (appError) { setAppStatus('error'); return; }
         const unsubscribe = onAuthStateChanged(auth, user => {
             if (user) {
                 setAppStatus('ready');
             } else {
                 signInAnonymously(auth).catch(err => {
-                  console.error("Anonymous sign-in failed:", err);
-                  setAppError("Anonymous sign-in failed. Please check Firebase Authentication settings.");
-                  setAppStatus('error');
+                    setAppError("Anonymous sign-in failed.");
+                    setAppStatus('error');
                 });
             }
         });
@@ -89,41 +84,23 @@ function App() {
 
     useEffect(() => {
         if (appStatus !== 'ready' || !db) return;
-
         const plantsUnsub = onSnapshot(collection(db, `artifacts/${appId}/public/data/plants`), 
             snapshot => setPlants(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
-            err => {
-              console.error("Failed to fetch plants:", err);
-              setAppError("Failed to fetch plant data.");
-              setAppStatus('error');
-            }
+            err => setAppError("Failed to fetch plant data.")
         );
-
         const faqsUnsub = onSnapshot(collection(db, `artifacts/${appId}/public/data/faqs`),
             snapshot => setFaqs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
-            err => console.error("Failed to fetch FAQs:", err)
+            err => console.error("Failed to fetch FAQs.")
         );
-
-        return () => {
-            plantsUnsub();
-            faqsUnsub();
-        };
+        return () => { plantsUnsub(); faqsUnsub(); };
     }, [appStatus]);
 
     if (appStatus === 'error') {
-        return (
-            <div className="w-full h-screen flex items-center justify-center bg-red-50 text-center">
-                <div className="p-8 bg-white shadow-lg rounded-lg">
-                    <h1 className="text-2xl font-bold text-red-700 mb-4">Application Error</h1>
-                    <p className="text-gray-700">{appError || "An unknown error occurred."}</p>
-                    <p className="text-sm text-gray-500 mt-4">Please check the developer console (F12) for more details and contact support if the issue persists.</p>
-                </div>
-            </div>
-        );
+        return <ErrorMessage error={appError} />;
     }
 
     if (appStatus === 'loading') {
-        return <div className="w-full h-screen flex items-center justify-center"><p className="text-xl font-semibold">Loading Your Beautiful Shop...</p></div>
+        return <LoadingScreen />;
     }
 
     let pageContent;
@@ -136,7 +113,7 @@ function App() {
 
     return (
         <PageContext.Provider value={{ setCurrentPage }}>
-            <div className="min-h-screen bg-gradient-to-br from-green-100 via-lime-50 to-yellow-50 font-sans text-gray-800 flex flex-col">
+            <div className="min-h-screen bg-[#F5F5DC] font-sans text-gray-800 flex flex-col">
                 <Header />
                 <main className="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-8">{pageContent}</main>
                 <Footer />
@@ -145,7 +122,22 @@ function App() {
     );
 }
 
-// --- Reusable Components ---
+// --- Reusable & UI Components ---
+const ErrorMessage = ({ error }) => (
+    <div className="w-full h-screen flex items-center justify-center bg-red-50 text-center">
+        <div className="p-8 bg-white shadow-lg rounded-lg">
+            <h1 className="text-2xl font-bold text-red-700 mb-4">Application Error</h1>
+            <p className="text-gray-700">{error || "An unknown error occurred."}</p>
+        </div>
+    </div>
+);
+
+const LoadingScreen = () => (
+    <div className="w-full h-screen flex items-center justify-center">
+        <p className="text-xl font-semibold">Loading Your Beautiful Shop...</p>
+    </div>
+);
+
 const Header = () => {
     const { setCurrentPage } = useContext(PageContext);
     return (
@@ -243,11 +235,11 @@ const CartPage = () => {
                 <div key={item.id} className="flex items-center justify-between border-b py-2">
                     <span className="font-semibold">{item.name || "Unknown Item"}</span>
                     <div className="flex items-center space-x-2">
-                        <button onClick={() => updateQuantity(item.id, (item.quantity || 1) - 1)} className="px-2 border rounded">-</button>
-                        <span>{item.quantity || 1}</span>
-                        <button onClick={() => updateQuantity(item.id, (item.quantity || 1) + 1)} className="px-2 border rounded">+</button>
+                        <button onClick={() => updateQuantity(item.id, item.quantity - 1)} className="px-2 border rounded">-</button>
+                        <span>{item.quantity}</span>
+                        <button onClick={() => updateQuantity(item.id, item.quantity + 1)} className="px-2 border rounded">+</button>
                     </div>
-                    <span>${((item.price || 0) * (item.quantity || 1)).toFixed(2)}</span>
+                    <span>${((item.price || 0) * item.quantity).toFixed(2)}</span>
                     <button onClick={() => removeFromCart(item.id)} className="text-red-500 hover:text-red-700 text-sm">Remove</button>
                 </div>
             ))}
